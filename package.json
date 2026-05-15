@@ -8,11 +8,11 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "next": "latest",
+    "next": "^16.2.6",
     "pdf-lib": "latest",
-    "react": "latest",
-    "react-dom": "latest",
+    "pdfjs-dist": "^5.7.284",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
     "typescript": "latest"
-  },
-  "devDependencies": {}
+  }
 }

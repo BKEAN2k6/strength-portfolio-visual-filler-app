@@ -1,26 +1,32 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 
-type FieldConfig = {
-  key: string;
-  label: string;
+type TextBox = {
+  id: string;
+  pageIndex: number;
   x: number;
   y: number;
-  pageIndex: number;
   w: number;
   h: number;
-  rows: number;
+  text: string;
+};
+
+type DragState = {
+  id: string;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
 };
 
 const PDF_URL = "/strength-portfolio.pdf";
-
-const fields: FieldConfig[] = [
-  { key: "q1", label: "1. What makes you excited?", pageIndex: 0, x: 50, y: 720, w: 450, h: 90, rows: 3 },
-  { key: "q2", label: "2. What feels easy to do?", pageIndex: 0, x: 50, y: 620, w: 450, h: 90, rows: 3 },
-  { key: "q3", label: "3. What strengths do others praise?", pageIndex: 0, x: 50, y: 520, w: 450, h: 90, rows: 3 },
-];
+const PDF_LOAD_TIMEOUT_MS = 8000;
+const PDF_PAGE_WIDTH = 612;
+const PDF_PAGE_HEIGHT = 792;
+const PDF_RENDER_SCALE = 1.35;
+const DEFAULT_PAGE = 1;
 
 function wrapText(text: string, maxChars: number) {
   const lines: string[] = [];
@@ -50,59 +56,215 @@ function wrapText(text: string, maxChars: number) {
   return lines;
 }
 
+function withTimeout<T>(promise: Promise<T>, message: string) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error(message)), PDF_LOAD_TIMEOUT_MS);
+    }),
+  ]);
+}
+
 export default function Home() {
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
   const [filledPdfUrl, setFilledPdfUrl] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  const [pageNumber, setPageNumber] = useState(DEFAULT_PAGE);
+  const [pageCount, setPageCount] = useState(12);
+  const [selectedTextBoxId, setSelectedTextBoxId] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState({ width: PDF_PAGE_WIDTH, height: PDF_PAGE_HEIGHT });
+  const [renderSize, setRenderSize] = useState({
+    width: PDF_PAGE_WIDTH * PDF_RENDER_SCALE,
+    height: PDF_PAGE_HEIGHT * PDF_RENDER_SCALE,
+  });
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dragRef = useRef<DragState | null>(null);
 
-  const answeredCount = useMemo(
-    () => Object.values(values).filter((value) => value.trim()).length,
-    [values]
-  );
+  const filledCount = useMemo(() => textBoxes.filter((box) => box.text.trim()).length, [textBoxes]);
 
-  function updateField(key: string, value: string) {
-    setValues((current) => ({ ...current, [key]: value }));
+  function updateTextBox(id: string, text: string) {
+    setTextBoxes((current) => current.map((box) => (box.id === id ? { ...box, text } : box)));
   }
 
+  function addTextBox(x = 80, y = 120) {
+    const id = crypto.randomUUID();
+    setSelectedTextBoxId(id);
+    setTextBoxes((current) => [
+      ...current,
+      {
+        id,
+        pageIndex: pageNumber - 1,
+        x,
+        y,
+        w: 220,
+        h: 48,
+        text: "",
+      },
+    ]);
+  }
+
+  function deleteSelectedTextBox() {
+    if (!selectedTextBoxId) return;
+    setTextBoxes((current) => current.filter((box) => box.id !== selectedTextBoxId));
+    setSelectedTextBoxId(null);
+  }
+
+  function startDragging(event: MouseEvent<HTMLTextAreaElement>, box: TextBox) {
+    setSelectedTextBoxId(box.id);
+    dragRef.current = {
+      id: box.id,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: box.x,
+      startY: box.y,
+    };
+  }
+
+  function addTextBoxAtPoint(event: MouseEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget && event.target !== canvasRef.current) return;
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const scaleX = pageSize.width / renderSize.width;
+    const scaleY = pageSize.height / renderSize.height;
+    const x = Math.max(0, (event.clientX - rect.left) * scaleX);
+    const y = Math.max(0, (event.clientY - rect.top) * scaleY);
+    addTextBox(x, y);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function renderPdfPage() {
+      try {
+        setStatus((current) => current || "Loading PDF...");
+        const pdfjs = await import("pdfjs-dist");
+        pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+          "pdfjs-dist/build/pdf.worker.mjs",
+          import.meta.url
+        ).toString();
+
+        const pdf = await pdfjs.getDocument(PDF_URL).promise;
+        setPageCount(pdf.numPages);
+        const page = await pdf.getPage(pageNumber);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+        const canvas = canvasRef.current;
+        const context = canvas?.getContext("2d");
+        if (!canvas || !context || cancelled) return;
+
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        setPageSize({ width: baseViewport.width, height: baseViewport.height });
+        setRenderSize({ width: viewport.width, height: viewport.height });
+
+        await page.render({ canvasContext: context, viewport }).promise;
+        if (!cancelled) setStatus("");
+      } catch (error) {
+        if (!cancelled) {
+          setStatus(error instanceof Error ? error.message : "Could not render the PDF.");
+        }
+      }
+    }
+
+    renderPdfPage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pageNumber]);
+
+  useEffect(() => {
+    function moveSelectedBox(event: globalThis.MouseEvent) {
+      const drag = dragRef.current;
+      if (!drag) return;
+
+      const scaleX = pageSize.width / renderSize.width;
+      const scaleY = pageSize.height / renderSize.height;
+      const nextX = drag.startX + (event.clientX - drag.startClientX) * scaleX;
+      const nextY = drag.startY + (event.clientY - drag.startClientY) * scaleY;
+
+      setTextBoxes((current) =>
+        current.map((box) => {
+          if (box.id !== drag.id) return box;
+
+          return {
+            ...box,
+            x: Math.min(Math.max(0, nextX), Math.max(0, pageSize.width - box.w)),
+            y: Math.min(Math.max(0, nextY), Math.max(0, pageSize.height - box.h)),
+          };
+        })
+      );
+    }
+
+    function stopDragging() {
+      dragRef.current = null;
+    }
+
+    window.addEventListener("mousemove", moveSelectedBox);
+    window.addEventListener("mouseup", stopDragging);
+
+    return () => {
+      window.removeEventListener("mousemove", moveSelectedBox);
+      window.removeEventListener("mouseup", stopDragging);
+    };
+  }, [pageSize.height, pageSize.width, renderSize.height, renderSize.width]);
+
   async function createFilledPdf() {
-    setStatus("Creating your filled PDF...");
-    if (filledPdfUrl) {
-      URL.revokeObjectURL(filledPdfUrl);
-      setFilledPdfUrl(null);
-    }
+    try {
+      setStatus("Creating your filled PDF...");
+      if (filledPdfUrl) {
+        URL.revokeObjectURL(filledPdfUrl);
+        setFilledPdfUrl(null);
+      }
 
-    const existingPdfBytes = await fetch(PDF_URL).then((res) => res.arrayBuffer());
-    const pdfDoc = await PDFDocument.load(existingPdfBytes);
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const fontSize = 12;
-    const lineHeight = 16;
+      const response = await fetch(PDF_URL);
+      if (!response.ok) {
+        throw new Error(`Cannot load source PDF (${response.status}).`);
+      }
 
-    for (const field of fields) {
-      const value = values[field.key]?.trim();
-      if (!value) continue;
+      const existingPdfBytes = await response.arrayBuffer();
+      if (existingPdfBytes.byteLength === 0) {
+        throw new Error("Source PDF is empty. Replace public/strength-portfolio.pdf with the real PDF file.");
+      }
 
-      const page = pdfDoc.getPage(field.pageIndex);
-      const maxChars = Math.max(18, Math.floor(field.w / 6));
-      const lines = wrapText(value, maxChars);
-      const maxLines = Math.floor(field.h / lineHeight);
+      const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+      const pdfDoc = await withTimeout(
+        PDFDocument.load(existingPdfBytes, { ignoreEncryption: true }),
+        "This PDF takes too long to process. Re-export or compress public/strength-portfolio.pdf, then try again."
+      );
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const fontSize = 12;
+      const lineHeight = 16;
 
-      lines.slice(0, maxLines).forEach((line, index) => {
-        page.drawText(line, {
-          x: field.x,
-          y: field.y - index * lineHeight,
-          size: fontSize,
-          font,
-          color: rgb(0.1, 0.1, 0.1),
-          maxWidth: field.w,
+      for (const box of textBoxes) {
+        const value = box.text.trim();
+        if (!value) continue;
+
+        const page = pdfDoc.getPage(box.pageIndex);
+        const maxChars = Math.max(18, Math.floor(box.w / 6));
+        const lines = wrapText(value, maxChars);
+        const maxLines = Math.floor(box.h / lineHeight);
+
+        lines.slice(0, maxLines).forEach((line, index) => {
+          page.drawText(line, {
+            x: box.x,
+            y: page.getHeight() - box.y - fontSize - index * lineHeight,
+            size: fontSize,
+            font,
+            color: rgb(0.1, 0.1, 0.1),
+            maxWidth: box.w,
+          });
         });
-      });
-    }
+      }
 
-    const pdfBytes = await pdfDoc.save();
-    const blob = new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
-    const url = URL.createObjectURL(blob);
-    setFilledPdfUrl(url);
-    setStatus("Preview updated. You can now download the filled PDF.");
+      const pdfBytes = await pdfDoc.save();
+      const blob = new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      setFilledPdfUrl(url);
+      setStatus("Preview updated. You can now download the filled PDF.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not create the filled PDF.");
+    }
   }
 
   function downloadFilledPdf() {
@@ -129,6 +291,20 @@ export default function Home() {
           <a href={PDF_URL} target="_blank" rel="noreferrer" style={styles.secondaryButton}>
             Open original PDF
           </a>
+          <button onClick={() => addTextBox()} style={styles.secondaryButton}>
+            Tạo text box
+          </button>
+          <button
+            onClick={deleteSelectedTextBox}
+            disabled={!selectedTextBoxId}
+            style={{
+              ...styles.secondaryButton,
+              opacity: selectedTextBoxId ? 1 : 0.5,
+              cursor: selectedTextBoxId ? "pointer" : "not-allowed",
+            }}
+          >
+            Xoá text box
+          </button>
           <button onClick={createFilledPdf} style={styles.primaryButton}>
             Generate filled PDF
           </button>
@@ -147,31 +323,72 @@ export default function Home() {
       </section>
 
       <section style={styles.grid}>
-        <aside style={styles.formPanel}>
-          <h2 style={styles.panelTitle}>Fill your answers</h2>
-          <p style={styles.helper}>{answeredCount} of {fields.length} fields filled</p>
-          <div style={styles.fields}>
-            {fields.map((field) => (
-              <label key={field.key} style={styles.label}>
-                <span>{field.label}</span>
-                <textarea
-                  rows={field.rows}
-                  value={values[field.key] ?? ""}
-                  onChange={(event) => updateField(field.key, event.target.value)}
-                  style={styles.textarea}
-                  placeholder="Type your answer here"
-                />
-              </label>
-            ))}
-          </div>
-        </aside>
-
         <section style={styles.previewPanel}>
           <div style={styles.previewHeader}>
-            <h2 style={styles.panelTitle}>{filledPdfUrl ? "Filled PDF preview" : "Original PDF preview"}</h2>
-            <p style={styles.helper}>{status || "Your PDF preview appears here."}</p>
+            <div style={styles.previewTitleRow}>
+              <h2 style={styles.panelTitle}>Fill directly on page {pageNumber}</h2>
+              <div style={styles.pageControls}>
+                <button
+                  onClick={() => setPageNumber((page) => Math.max(1, page - 1))}
+                  style={styles.smallButton}
+                >
+                  Prev
+                </button>
+                <span style={styles.pageBadge}>{pageNumber} / {pageCount}</span>
+                <button
+                  onClick={() => setPageNumber((page) => Math.min(pageCount, page + 1))}
+                  style={styles.smallButton}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+            <p style={styles.helper}>
+              {status || `Double-click a blank area to add text. ${filledCount} text boxes filled.`}
+            </p>
           </div>
-          <iframe title="PDF preview" src={filledPdfUrl ?? PDF_URL} style={styles.iframe} />
+          <div style={styles.pdfScroller}>
+            <div
+              onDoubleClick={addTextBoxAtPoint}
+              style={{
+                ...styles.pdfPage,
+                width: renderSize.width,
+                height: renderSize.height,
+              }}
+            >
+              <canvas ref={canvasRef} style={styles.canvas} />
+              {textBoxes
+                .filter((box) => box.pageIndex === pageNumber - 1)
+                .map((box) => {
+                const scaleX = renderSize.width / pageSize.width;
+                const scaleY = renderSize.height / pageSize.height;
+                const top = box.y * scaleY;
+                const left = box.x * scaleX;
+                const width = box.w * scaleX;
+                const height = box.h * scaleY;
+
+                return (
+                  <textarea
+                    key={box.id}
+                    value={box.text}
+                    onMouseDown={(event) => startDragging(event, box)}
+                    onFocus={() => setSelectedTextBoxId(box.id)}
+                    onClick={() => setSelectedTextBoxId(box.id)}
+                    onChange={(event) => updateTextBox(box.id, event.target.value)}
+                    placeholder="Type here"
+                    style={{
+                      ...styles.overlayField,
+                      ...(selectedTextBoxId === box.id ? styles.selectedOverlayField : {}),
+                      top,
+                      left,
+                      width,
+                      height,
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </div>
         </section>
       </section>
     </main>
@@ -181,7 +398,7 @@ export default function Home() {
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
-    padding: 32,
+    padding: 28,
     background: "#f3f4f6",
     fontFamily: "Inter, system-ui, sans-serif",
     color: "#111827",
@@ -190,7 +407,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexWrap: "wrap",
     justifyContent: "space-between",
-    gap: 20,
+    alignItems: "flex-start",
+    gap: 24,
     marginBottom: 24,
   },
   eyebrow: {
@@ -202,8 +420,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   title: {
     margin: "8px 0 0",
-    fontSize: 38,
-    lineHeight: 1.05,
+    fontSize: 36,
+    lineHeight: 1.1,
   },
   subtitle: {
     margin: "12px 0 0",
@@ -214,10 +432,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexWrap: "wrap",
     gap: 12,
+    alignItems: "center",
   },
   secondaryButton: {
-    padding: "12px 18px",
-    borderRadius: 12,
+    display: "inline-flex",
+    alignItems: "center",
+    minHeight: 44,
+    padding: "0 16px",
+    borderRadius: 8,
     background: "white",
     color: "#111827",
     textDecoration: "none",
@@ -225,8 +447,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   primaryButton: {
-    padding: "12px 18px",
-    borderRadius: 12,
+    minHeight: 44,
+    padding: "0 16px",
+    borderRadius: 8,
     background: "#4f46e5",
     color: "white",
     border: "none",
@@ -235,18 +458,19 @@ const styles: Record<string, React.CSSProperties> = {
   },
   grid: {
     display: "grid",
-    gridTemplateColumns: "1fr 1.4fr",
+    gridTemplateColumns: "1fr",
     gap: 24,
+    alignItems: "start",
   },
   formPanel: {
     background: "white",
-    borderRadius: 24,
-    padding: 28,
+    borderRadius: 14,
+    padding: 24,
     boxShadow: "0 24px 50px rgba(15, 23, 42, 0.08)",
   },
   panelTitle: {
     margin: 0,
-    fontSize: 24,
+    fontSize: 22,
   },
   helper: {
     marginTop: 10,
@@ -265,7 +489,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   textarea: {
     width: "100%",
-    minHeight: 120,
+    minHeight: 110,
     resize: "vertical",
     padding: 14,
     borderRadius: 14,
@@ -276,10 +500,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "Inter, system-ui, sans-serif",
   },
   previewPanel: {
-    minHeight: 700,
     background: "white",
-    borderRadius: 24,
-    padding: 28,
+    borderRadius: 14,
+    padding: 24,
     boxShadow: "0 24px 50px rgba(15, 23, 42, 0.08)",
     display: "flex",
     flexDirection: "column",
@@ -287,11 +510,71 @@ const styles: Record<string, React.CSSProperties> = {
   previewHeader: {
     marginBottom: 20,
   },
-  iframe: {
+  previewTitleRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+    flexWrap: "wrap",
+  },
+  pageControls: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  smallButton: {
+    minHeight: 34,
+    padding: "0 12px",
+    borderRadius: 8,
+    border: "1px solid #d1d5db",
+    background: "white",
+    color: "#111827",
+    cursor: "pointer",
+    fontWeight: 600,
+  },
+  pageBadge: {
+    minWidth: 58,
+    textAlign: "center",
+    color: "#374151",
+    fontWeight: 600,
+  },
+  pdfScroller: {
     width: "100%",
-    flex: 1,
-    minHeight: 580,
+    maxHeight: "calc(100vh - 260px)",
+    minHeight: 620,
+    overflow: "auto",
+    borderRadius: 10,
     border: "1px solid #e5e7eb",
-    borderRadius: 18,
+    background: "#2f3136",
+    padding: 24,
+  },
+  pdfPage: {
+    position: "relative",
+    margin: "0 auto",
+    background: "white",
+    boxShadow: "0 14px 36px rgba(0, 0, 0, 0.28)",
+  },
+  canvas: {
+    display: "block",
+    width: "100%",
+    height: "100%",
+  },
+  overlayField: {
+    position: "absolute",
+    padding: 10,
+    borderRadius: 6,
+    border: "1px solid rgba(79, 70, 229, 0.55)",
+    background: "rgba(255, 255, 255, 0.9)",
+    color: "#111827",
+    fontSize: 14,
+    fontFamily: "Inter, system-ui, sans-serif",
+    resize: "none",
+    boxSizing: "border-box",
+    outline: "none",
+    cursor: "move",
+  },
+  selectedOverlayField: {
+    border: "2px solid #4f46e5",
+    boxShadow: "0 0 0 3px rgba(79, 70, 229, 0.18)",
   },
 };
