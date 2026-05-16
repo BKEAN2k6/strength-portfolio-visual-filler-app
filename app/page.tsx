@@ -21,7 +21,10 @@ type DragState = {
   startY: number;
 };
 
+type Role = "user" | "admin";
+
 const PDF_URL = "/strength-portfolio.pdf";
+const ADMIN_TOKEN_STORAGE_KEY = "strengthPortfolioAdminJwt";
 const PDF_LOAD_TIMEOUT_MS = 8000;
 const PDF_PAGE_WIDTH = 612;
 const PDF_PAGE_HEIGHT = 792;
@@ -41,6 +44,40 @@ const PRESET_TEXT_BOXES: TextBox[] = [
   { id: "p10-wishlist", pageIndex: 9, x: 0.120, y: 0.305, w: 0.620, h: 0.235, text: "" },
   { id: "p10-notice", pageIndex: 9, x: 0.120, y: 0.620, w: 0.620, h: 0.245, text: "" },
 ];
+
+function encodeBase64Url(value: string) {
+  return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeBase64Url(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+  return atob(padded);
+}
+
+function createDemoAdminJwt() {
+  const header = encodeBase64Url(JSON.stringify({ alg: "none", typ: "JWT" }));
+  const payload = encodeBase64Url(
+    JSON.stringify({
+      role: "admin",
+      name: "Admin Editor",
+      iat: Math.floor(Date.now() / 1000),
+    })
+  );
+
+  return `${header}.${payload}.`;
+}
+
+function getRoleFromJwt(token: string | null): Role {
+  if (!token) return "user";
+
+  try {
+    const payload = JSON.parse(decodeBase64Url(token.split(".")[1] || ""));
+    return payload.role === "admin" ? "admin" : "user";
+  } catch {
+    return "user";
+  }
+}
 
 function wrapText(text: string, maxChars: number) {
   const lines: string[] = [];
@@ -83,7 +120,8 @@ export default function Home() {
   const [textBoxes, setTextBoxes] = useState<TextBox[]>(PRESET_TEXT_BOXES);
   const [filledPdfUrl, setFilledPdfUrl] = useState<string | null>(null);
   const [status, setStatus] = useState("");
-  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [role, setRole] = useState<Role>("user");
+  const [jwtToken, setJwtToken] = useState("");
   const [selectedTextBoxId, setSelectedTextBoxId] = useState<string | null>(null);
   const [pageNumber, setPageNumber] = useState(DEFAULT_PAGE);
   const [pageCount, setPageCount] = useState(12);
@@ -95,6 +133,7 @@ export default function Home() {
   const textBoxRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const dragRef = useRef<DragState | null>(null);
 
+  const isAdminMode = role === "admin";
   const filledCount = useMemo(() => textBoxes.filter((box) => box.text.trim()).length, [textBoxes]);
   const currentPageBoxes = useMemo(
     () =>
@@ -153,11 +192,30 @@ export default function Home() {
     setStatus(`Copied ${currentPageBoxes.length} boxes from page ${pageNumber}.`);
   }
 
+  function exitAdminMode() {
+    window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    setJwtToken("");
+    setRole("user");
+    setSelectedTextBoxId(null);
+    setStatus("Switched back to user role.");
+  }
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const adminMode = params.get("admin") === "1";
-    setIsAdminMode(adminMode);
-    if (adminMode && !params.get("page")) {
+    let token = params.get("token") || window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+
+    if (params.get("admin") === "1" && !token) {
+      token = createDemoAdminJwt();
+    }
+
+    const nextRole = getRoleFromJwt(token);
+    setJwtToken(token);
+    setRole(nextRole);
+
+    if (token) {
+      window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+    }
+    if (nextRole === "admin" && !params.get("page")) {
       setPageNumber(8);
     }
     if (params.get("page")) {
@@ -342,6 +400,14 @@ export default function Home() {
           >
             Download filled PDF
           </button>
+          {isAdminMode && (
+            <>
+              <span style={styles.roleBadge}>JWT role: admin</span>
+              <button onClick={exitAdminMode} style={styles.secondaryButton}>
+                Exit admin
+              </button>
+            </>
+          )}
         </div>
       </section>
 
@@ -434,13 +500,14 @@ export default function Home() {
                 <div>
                   <h3 style={styles.adminTitle}>Admin coordinates for page {pageNumber}</h3>
                   <p style={styles.adminText}>
-                    Kéo/resize trên PDF, rồi copy JSON này gửi lại mình để chốt vị trí.
+                    JWT role admin đang bật. Kéo nút tím để đổi vị trí, kéo góc ô để resize, rồi copy JSON gửi mình.
                   </p>
                 </div>
                 <button onClick={copyCurrentPageBoxes} style={styles.smallButton}>
                   Copy JSON
                 </button>
               </div>
+              <div style={styles.tokenLine}>JWT: {jwtToken}</div>
               <pre style={styles.adminCode}>{JSON.stringify(currentPageBoxes, null, 2)}</pre>
             </section>
           )}
@@ -593,6 +660,18 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#374151",
     fontWeight: 600,
   },
+  roleBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    minHeight: 34,
+    padding: "0 12px",
+    borderRadius: 999,
+    background: "#eef2ff",
+    color: "#3730a3",
+    border: "1px solid #c7d2fe",
+    fontSize: 13,
+    fontWeight: 700,
+  },
   pdfScroller: {
     width: "100%",
     maxHeight: "calc(100vh - 260px)",
@@ -673,6 +752,16 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "6px 0 0",
     color: "#6b7280",
     fontSize: 13,
+  },
+  tokenLine: {
+    marginTop: 12,
+    padding: "10px 12px",
+    borderRadius: 8,
+    background: "white",
+    border: "1px solid #e5e7eb",
+    color: "#4b5563",
+    fontSize: 12,
+    overflowWrap: "anywhere",
   },
   adminCode: {
     margin: "14px 0 0",
