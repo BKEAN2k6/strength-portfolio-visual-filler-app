@@ -155,9 +155,37 @@ export default function Home() {
     setTextBoxes((current) => current.map((box) => (box.id === id ? { ...box, text } : box)));
   }
 
+  function addTextBox() {
+    const id = `p${pageNumber}-custom-${Date.now()}`;
+    const nextBox: TextBox = {
+      id,
+      pageIndex: pageNumber - 1,
+      x: 0.22,
+      y: 0.34,
+      w: 0.34,
+      h: 0.12,
+      text: "",
+    };
+
+    setTextBoxes((current) => [...current, nextBox]);
+    setSelectedTextBoxId(id);
+    setStatus(`Added text box on page ${pageNumber}.`);
+  }
+
+  function deleteSelectedTextBox() {
+    if (!selectedTextBoxId) {
+      setStatus("Select a text box first, then delete it.");
+      return;
+    }
+
+    setTextBoxes((current) => current.filter((box) => box.id !== selectedTextBoxId));
+    setSelectedTextBoxId(null);
+    setStatus("Deleted selected text box.");
+  }
+
   function syncTextBoxSize(id: string) {
     const element = textBoxRefs.current[id];
-    if (!element) return;
+    if (!element || !isAdminMode) return;
 
     setTextBoxes((current) =>
       current.map((box) =>
@@ -471,307 +499,4 @@ export default function Home() {
                     style={{
                       ...styles.overlayField,
                       ...(isAdminMode ? styles.adminOverlayField : {}),
-                      ...(selectedTextBoxId === box.id && isAdminMode ? styles.selectedOverlayField : {}),
-                      top,
-                      left,
-                      width,
-                      height,
-                    }}
-                  />
-                  {isAdminMode && (
-                    <button
-                      aria-label="Move text box"
-                      onMouseDown={(event) => startDragging(event, box)}
-                      style={{
-                        ...styles.moveHandle,
-                        top: top - 9,
-                        left: left - 9,
-                      }}
-                    />
-                  )}
-                  </Fragment>
-                );
-              })}
-            </div>
-          </div>
-          {isAdminMode && (
-            <section style={styles.adminPanel}>
-              <div style={styles.adminHeader}>
-                <div>
-                  <h3 style={styles.adminTitle}>Admin coordinates for page {pageNumber}</h3>
-                  <p style={styles.adminText}>
-                    JWT role admin đang bật. Kéo nút tím để đổi vị trí, kéo góc ô để resize, rồi copy JSON gửi mình.
-                  </p>
-                </div>
-                <button onClick={copyCurrentPageBoxes} style={styles.smallButton}>
-                  Copy JSON
-                </button>
-              </div>
-              <div style={styles.tokenLine}>JWT: {jwtToken}</div>
-              <pre style={styles.adminCode}>{JSON.stringify(currentPageBoxes, null, 2)}</pre>
-            </section>
-          )}
-        </section>
-      </section>
-    </main>
-  );
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    padding: 28,
-    background: "#f3f4f6",
-    fontFamily: "Inter, system-ui, sans-serif",
-    color: "#111827",
-  },
-  header: {
-    display: "flex",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 24,
-    marginBottom: 24,
-  },
-  eyebrow: {
-    margin: 0,
-    textTransform: "uppercase",
-    fontSize: 12,
-    letterSpacing: "0.18em",
-    color: "#6366f1",
-  },
-  title: {
-    margin: "8px 0 0",
-    fontSize: 36,
-    lineHeight: 1.1,
-  },
-  subtitle: {
-    margin: "12px 0 0",
-    maxWidth: 580,
-    lineHeight: 1.7,
-  },
-  actions: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 12,
-    alignItems: "center",
-  },
-  secondaryButton: {
-    display: "inline-flex",
-    alignItems: "center",
-    minHeight: 44,
-    padding: "0 16px",
-    borderRadius: 8,
-    background: "white",
-    color: "#111827",
-    textDecoration: "none",
-    border: "1px solid #d1d5db",
-    fontWeight: 600,
-  },
-  primaryButton: {
-    minHeight: 44,
-    padding: "0 16px",
-    borderRadius: 8,
-    background: "#4f46e5",
-    color: "white",
-    border: "none",
-    cursor: "pointer",
-    fontWeight: 600,
-  },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: 24,
-    alignItems: "start",
-  },
-  formPanel: {
-    background: "white",
-    borderRadius: 14,
-    padding: 24,
-    boxShadow: "0 24px 50px rgba(15, 23, 42, 0.08)",
-  },
-  panelTitle: {
-    margin: 0,
-    fontSize: 22,
-  },
-  helper: {
-    marginTop: 10,
-    color: "#6b7280",
-  },
-  fields: {
-    marginTop: 24,
-    display: "grid",
-    gap: 16,
-  },
-  label: {
-    display: "grid",
-    gap: 8,
-    fontSize: 14,
-    fontWeight: 600,
-  },
-  textarea: {
-    width: "100%",
-    minHeight: 110,
-    resize: "vertical",
-    padding: 14,
-    borderRadius: 14,
-    border: "1px solid #d1d5db",
-    background: "#f9fafb",
-    fontSize: 14,
-    color: "#111827",
-    fontFamily: "Inter, system-ui, sans-serif",
-  },
-  previewPanel: {
-    background: "white",
-    borderRadius: 14,
-    padding: 24,
-    boxShadow: "0 24px 50px rgba(15, 23, 42, 0.08)",
-    display: "flex",
-    flexDirection: "column",
-  },
-  previewHeader: {
-    marginBottom: 20,
-  },
-  previewTitleRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 16,
-    flexWrap: "wrap",
-  },
-  pageControls: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-  },
-  smallButton: {
-    minHeight: 34,
-    padding: "0 12px",
-    borderRadius: 8,
-    border: "1px solid #d1d5db",
-    background: "white",
-    color: "#111827",
-    cursor: "pointer",
-    fontWeight: 600,
-  },
-  pageBadge: {
-    minWidth: 58,
-    textAlign: "center",
-    color: "#374151",
-    fontWeight: 600,
-  },
-  roleBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    minHeight: 34,
-    padding: "0 12px",
-    borderRadius: 999,
-    background: "#eef2ff",
-    color: "#3730a3",
-    border: "1px solid #c7d2fe",
-    fontSize: 13,
-    fontWeight: 700,
-  },
-  pdfScroller: {
-    width: "100%",
-    maxHeight: "calc(100vh - 260px)",
-    minHeight: 620,
-    overflow: "auto",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#2f3136",
-    padding: 24,
-  },
-  pdfPage: {
-    position: "relative",
-    margin: "0 auto",
-    background: "white",
-    boxShadow: "0 14px 36px rgba(0, 0, 0, 0.28)",
-  },
-  canvas: {
-    display: "block",
-    width: "100%",
-    height: "100%",
-  },
-  overlayField: {
-    position: "absolute",
-    padding: "6px 8px",
-    borderRadius: 6,
-    border: "1px solid rgba(99, 102, 241, 0.22)",
-    background: "rgba(255, 255, 255, 0.42)",
-    color: "#111827",
-    fontSize: 13,
-    lineHeight: 1.35,
-    fontFamily: "Inter, system-ui, sans-serif",
-    resize: "both",
-    overflow: "auto",
-    boxSizing: "border-box",
-    outline: "none",
-    cursor: "text",
-    minWidth: 80,
-    minHeight: 36,
-  },
-  adminOverlayField: {
-    border: "1px dashed rgba(79, 70, 229, 0.75)",
-    background: "rgba(255, 255, 255, 0.58)",
-  },
-  selectedOverlayField: {
-    border: "2px solid #4f46e5",
-    boxShadow: "0 0 0 3px rgba(79, 70, 229, 0.16)",
-  },
-  moveHandle: {
-    position: "absolute",
-    width: 18,
-    height: 18,
-    borderRadius: 999,
-    border: "2px solid white",
-    background: "#4f46e5",
-    boxShadow: "0 4px 10px rgba(15, 23, 42, 0.25)",
-    cursor: "move",
-    zIndex: 3,
-  },
-  adminPanel: {
-    marginTop: 18,
-    borderRadius: 10,
-    border: "1px solid #d1d5db",
-    background: "#f9fafb",
-    padding: 16,
-  },
-  adminHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-    alignItems: "flex-start",
-    flexWrap: "wrap",
-  },
-  adminTitle: {
-    margin: 0,
-    fontSize: 16,
-  },
-  adminText: {
-    margin: "6px 0 0",
-    color: "#6b7280",
-    fontSize: 13,
-  },
-  tokenLine: {
-    marginTop: 12,
-    padding: "10px 12px",
-    borderRadius: 8,
-    background: "white",
-    border: "1px solid #e5e7eb",
-    color: "#4b5563",
-    fontSize: 12,
-    overflowWrap: "anywhere",
-  },
-  adminCode: {
-    margin: "14px 0 0",
-    maxHeight: 280,
-    overflow: "auto",
-    borderRadius: 8,
-    background: "#111827",
-    color: "#f9fafb",
-    padding: 14,
-    fontSize: 12,
-    lineHeight: 1.5,
-  },
-};
+                      ...(selectedTextBoxId === box.id && isAdminMode ? styles.selectedOverlayField :
