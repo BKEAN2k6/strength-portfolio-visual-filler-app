@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent } from "react";
 
 type TextBox = {
   id: string;
@@ -13,14 +12,6 @@ type TextBox = {
   text: string;
 };
 
-type DragState = {
-  id: string;
-  startClientX: number;
-  startClientY: number;
-  startX: number;
-  startY: number;
-};
-
 const PDF_URL = "/strength-portfolio.pdf";
 const PDF_LOAD_TIMEOUT_MS = 8000;
 const PDF_PAGE_WIDTH = 612;
@@ -28,21 +19,18 @@ const PDF_PAGE_HEIGHT = 792;
 const PDF_RENDER_SCALE = 1.35;
 const DEFAULT_PAGE = 1;
 const PRESET_TEXT_BOXES: TextBox[] = [
-  { id: "p8-q1", pageIndex: 7, x: 0.17, y: 0.28, w: 0.20, h: 0.12, text: "" },
-  { id: "p8-q2", pageIndex: 7, x: 0.18, y: 0.65, w: 0.21, h: 0.12, text: "" },
-  { id: "p8-q3", pageIndex: 7, x: 0.37, y: 0.65, w: 0.22, h: 0.12, text: "" },
-  { id: "p8-q4", pageIndex: 7, x: 0.38, y: 0.39, w: 0.22, h: 0.12, text: "" },
-  { id: "p8-q5", pageIndex: 7, x: 0.62, y: 0.08, w: 0.18, h: 0.12, text: "" },
-  { id: "p8-q6", pageIndex: 7, x: 0.56, y: 0.65, w: 0.20, h: 0.12, text: "" },
-  { id: "p8-q7", pageIndex: 7, x: 0.68, y: 0.39, w: 0.21, h: 0.12, text: "" },
-  { id: "p8-q8", pageIndex: 7, x: 0.78, y: 0.08, w: 0.18, h: 0.12, text: "" },
-  { id: "p8-q9", pageIndex: 7, x: 0.76, y: 0.65, w: 0.20, h: 0.12, text: "" },
-  { id: "p9-q1", pageIndex: 8, x: 0.14, y: 0.20, w: 0.30, h: 0.12, text: "" },
-  { id: "p9-q2", pageIndex: 8, x: 0.56, y: 0.20, w: 0.30, h: 0.12, text: "" },
-  { id: "p9-q3", pageIndex: 8, x: 0.14, y: 0.42, w: 0.30, h: 0.12, text: "" },
-  { id: "p9-q4", pageIndex: 8, x: 0.56, y: 0.42, w: 0.30, h: 0.12, text: "" },
-  { id: "p9-q5", pageIndex: 8, x: 0.14, y: 0.64, w: 0.30, h: 0.12, text: "" },
-  { id: "p9-q6", pageIndex: 8, x: 0.56, y: 0.64, w: 0.30, h: 0.12, text: "" },
+  { id: "p8-q1", pageIndex: 7, x: 0.105, y: 0.390, w: 0.185, h: 0.090, text: "" },
+  { id: "p8-q2", pageIndex: 7, x: 0.115, y: 0.790, w: 0.185, h: 0.095, text: "" },
+  { id: "p8-q3", pageIndex: 7, x: 0.325, y: 0.815, w: 0.185, h: 0.080, text: "" },
+  { id: "p8-q4", pageIndex: 7, x: 0.365, y: 0.530, w: 0.185, h: 0.080, text: "" },
+  { id: "p8-q5", pageIndex: 7, x: 0.525, y: 0.275, w: 0.155, h: 0.080, text: "" },
+  { id: "p8-q6", pageIndex: 7, x: 0.575, y: 0.815, w: 0.170, h: 0.080, text: "" },
+  { id: "p8-q7", pageIndex: 7, x: 0.715, y: 0.625, w: 0.175, h: 0.090, text: "" },
+  { id: "p8-q8", pageIndex: 7, x: 0.735, y: 0.285, w: 0.160, h: 0.080, text: "" },
+  { id: "p8-q9", pageIndex: 7, x: 0.785, y: 0.820, w: 0.165, h: 0.080, text: "" },
+  { id: "p9-main", pageIndex: 8, x: 0.215, y: 0.420, w: 0.520, h: 0.250, text: "" },
+  { id: "p10-wishlist", pageIndex: 9, x: 0.120, y: 0.305, w: 0.620, h: 0.235, text: "" },
+  { id: "p10-notice", pageIndex: 9, x: 0.120, y: 0.620, w: 0.620, h: 0.245, text: "" },
 ];
 
 function wrapText(text: string, maxChars: number) {
@@ -86,17 +74,14 @@ export default function Home() {
   const [textBoxes, setTextBoxes] = useState<TextBox[]>(PRESET_TEXT_BOXES);
   const [filledPdfUrl, setFilledPdfUrl] = useState<string | null>(null);
   const [status, setStatus] = useState("");
-  const [isAdminMode, setIsAdminMode] = useState(false);
   const [pageNumber, setPageNumber] = useState(DEFAULT_PAGE);
   const [pageCount, setPageCount] = useState(12);
-  const [selectedTextBoxId, setSelectedTextBoxId] = useState<string | null>(null);
-  const [pageSize, setPageSize] = useState({ width: PDF_PAGE_WIDTH, height: PDF_PAGE_HEIGHT });
   const [renderSize, setRenderSize] = useState({
     width: PDF_PAGE_WIDTH * PDF_RENDER_SCALE,
     height: PDF_PAGE_HEIGHT * PDF_RENDER_SCALE,
   });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const dragRef = useRef<DragState | null>(null);
+  const textBoxRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
 
   const filledCount = useMemo(() => textBoxes.filter((box) => box.text.trim()).length, [textBoxes]);
 
@@ -104,53 +89,22 @@ export default function Home() {
     setTextBoxes((current) => current.map((box) => (box.id === id ? { ...box, text } : box)));
   }
 
-  function addTextBox(x = 80, y = 120) {
-    const id = crypto.randomUUID();
-    setSelectedTextBoxId(id);
-    setTextBoxes((current) => [
-      ...current,
-      {
-        id,
-        pageIndex: pageNumber - 1,
-        x,
-        y,
-        w: 0.24,
-        h: 0.08,
-        text: "",
-      },
-    ]);
+  function syncTextBoxSize(id: string) {
+    const element = textBoxRefs.current[id];
+    if (!element) return;
+
+    setTextBoxes((current) =>
+      current.map((box) =>
+        box.id === id
+          ? {
+              ...box,
+              w: Math.max(0.04, element.offsetWidth / renderSize.width),
+              h: Math.max(0.04, element.offsetHeight / renderSize.height),
+            }
+          : box
+      )
+    );
   }
-
-  function deleteSelectedTextBox() {
-    if (!selectedTextBoxId) return;
-    setTextBoxes((current) => current.filter((box) => box.id !== selectedTextBoxId));
-    setSelectedTextBoxId(null);
-  }
-
-  function startDragging(event: MouseEvent<HTMLTextAreaElement>, box: TextBox) {
-    if (!isAdminMode) return;
-    setSelectedTextBoxId(box.id);
-    dragRef.current = {
-      id: box.id,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startX: box.x,
-      startY: box.y,
-    };
-  }
-
-  function addTextBoxAtPoint(event: MouseEvent<HTMLDivElement>) {
-    if (event.target !== event.currentTarget && event.target !== canvasRef.current) return;
-
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / renderSize.width));
-    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / renderSize.height));
-    addTextBox(x, y);
-  }
-
-  useEffect(() => {
-    setIsAdminMode(new URLSearchParams(window.location.search).get("admin") === "1");
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,7 +129,6 @@ export default function Home() {
 
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        setPageSize({ width: baseViewport.width, height: baseViewport.height });
         setRenderSize({ width: viewport.width, height: viewport.height });
 
         await page.render({ canvasContext: context, viewport }).promise;
@@ -193,40 +146,6 @@ export default function Home() {
       cancelled = true;
     };
   }, [pageNumber]);
-
-  useEffect(() => {
-    function moveSelectedBox(event: globalThis.MouseEvent) {
-      const drag = dragRef.current;
-      if (!drag) return;
-
-      const nextX = drag.startX + (event.clientX - drag.startClientX) / renderSize.width;
-      const nextY = drag.startY + (event.clientY - drag.startClientY) / renderSize.height;
-
-      setTextBoxes((current) =>
-        current.map((box) => {
-          if (box.id !== drag.id) return box;
-
-          return {
-            ...box,
-            x: Math.min(Math.max(0, nextX), Math.max(0, 1 - box.w)),
-            y: Math.min(Math.max(0, nextY), Math.max(0, 1 - box.h)),
-          };
-        })
-      );
-    }
-
-    function stopDragging() {
-      dragRef.current = null;
-    }
-
-    window.addEventListener("mousemove", moveSelectedBox);
-    window.addEventListener("mouseup", stopDragging);
-
-    return () => {
-      window.removeEventListener("mousemove", moveSelectedBox);
-      window.removeEventListener("mouseup", stopDragging);
-    };
-  }, [pageSize.height, pageSize.width, renderSize.height, renderSize.width]);
 
   async function createFilledPdf() {
     try {
@@ -316,24 +235,6 @@ export default function Home() {
           <a href={PDF_URL} target="_blank" rel="noreferrer" style={styles.secondaryButton}>
             Open original PDF
           </a>
-          {isAdminMode && (
-            <>
-              <button onClick={() => addTextBox(0.1, 0.12)} style={styles.secondaryButton}>
-                Tạo text box
-              </button>
-              <button
-                onClick={deleteSelectedTextBox}
-                disabled={!selectedTextBoxId}
-                style={{
-                  ...styles.secondaryButton,
-                  opacity: selectedTextBoxId ? 1 : 0.5,
-                  cursor: selectedTextBoxId ? "pointer" : "not-allowed",
-                }}
-              >
-                Xoá text box
-              </button>
-            </>
-          )}
           <button onClick={createFilledPdf} style={styles.primaryButton}>
             Generate filled PDF
           </button>
@@ -373,15 +274,11 @@ export default function Home() {
               </div>
             </div>
             <p style={styles.helper}>
-              {status ||
-                (isAdminMode
-                  ? `Admin mode: double-click to add boxes, select and drag to move. ${filledCount} boxes filled.`
-                  : `${filledCount} fields filled. Use page 8 and 9 for the prepared fill areas.`)}
+              {status || `${filledCount} fields filled. Fill the prepared areas on pages 8, 9, and 10.`}
             </p>
           </div>
           <div style={styles.pdfScroller}>
             <div
-              onDoubleClick={isAdminMode ? addTextBoxAtPoint : undefined}
               style={{
                 ...styles.pdfPage,
                 width: renderSize.width,
@@ -400,16 +297,16 @@ export default function Home() {
                 return (
                   <textarea
                     key={box.id}
+                    ref={(element) => {
+                      textBoxRefs.current[box.id] = element;
+                    }}
                     value={box.text}
-                    onMouseDown={(event) => startDragging(event, box)}
-                    onFocus={() => setSelectedTextBoxId(box.id)}
-                    onClick={() => setSelectedTextBoxId(box.id)}
+                    onBlur={() => syncTextBoxSize(box.id)}
+                    onMouseUp={() => syncTextBoxSize(box.id)}
                     onChange={(event) => updateTextBox(box.id, event.target.value)}
-                    placeholder="Type here"
+                    placeholder=""
                     style={{
                       ...styles.overlayField,
-                      ...(isAdminMode ? styles.adminOverlayField : {}),
-                      ...(selectedTextBoxId === box.id ? styles.selectedOverlayField : {}),
                       top,
                       left,
                       width,
@@ -592,23 +489,20 @@ const styles: Record<string, React.CSSProperties> = {
   },
   overlayField: {
     position: "absolute",
-    padding: 10,
+    padding: "6px 8px",
     borderRadius: 6,
-    border: "1px solid rgba(79, 70, 229, 0.55)",
-    background: "rgba(255, 255, 255, 0.9)",
+    border: "1px solid rgba(99, 102, 241, 0.22)",
+    background: "rgba(255, 255, 255, 0.42)",
     color: "#111827",
-    fontSize: 14,
+    fontSize: 13,
+    lineHeight: 1.35,
     fontFamily: "Inter, system-ui, sans-serif",
-    resize: "none",
+    resize: "both",
+    overflow: "auto",
     boxSizing: "border-box",
     outline: "none",
     cursor: "text",
-  },
-  adminOverlayField: {
-    cursor: "move",
-  },
-  selectedOverlayField: {
-    border: "2px solid #4f46e5",
-    boxShadow: "0 0 0 3px rgba(79, 70, 229, 0.18)",
+    minWidth: 80,
+    minHeight: 36,
   },
 };
