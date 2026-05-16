@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 
 type TextBox = {
   id: string;
@@ -10,6 +11,14 @@ type TextBox = {
   w: number;
   h: number;
   text: string;
+};
+
+type DragState = {
+  id: string;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
 };
 
 const PDF_URL = "/strength-portfolio.pdf";
@@ -74,6 +83,8 @@ export default function Home() {
   const [textBoxes, setTextBoxes] = useState<TextBox[]>(PRESET_TEXT_BOXES);
   const [filledPdfUrl, setFilledPdfUrl] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [selectedTextBoxId, setSelectedTextBoxId] = useState<string | null>(null);
   const [pageNumber, setPageNumber] = useState(DEFAULT_PAGE);
   const [pageCount, setPageCount] = useState(12);
   const [renderSize, setRenderSize] = useState({
@@ -82,8 +93,24 @@ export default function Home() {
   });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textBoxRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const dragRef = useRef<DragState | null>(null);
 
   const filledCount = useMemo(() => textBoxes.filter((box) => box.text.trim()).length, [textBoxes]);
+  const currentPageBoxes = useMemo(
+    () =>
+      textBoxes
+        .filter((box) => box.pageIndex === pageNumber - 1)
+        .map(({ id, pageIndex, x, y, w, h }) => ({
+          id,
+          pageIndex,
+          x: Number(x.toFixed(3)),
+          y: Number(y.toFixed(3)),
+          w: Number(w.toFixed(3)),
+          h: Number(h.toFixed(3)),
+          text: "",
+        })),
+    [pageNumber, textBoxes]
+  );
 
   function updateTextBox(id: string, text: string) {
     setTextBoxes((current) => current.map((box) => (box.id === id ? { ...box, text } : box)));
@@ -105,6 +132,38 @@ export default function Home() {
       )
     );
   }
+
+  function startDragging(event: MouseEvent<HTMLElement>, box: TextBox) {
+    if (!isAdminMode) return;
+
+    syncTextBoxSize(box.id);
+    setSelectedTextBoxId(box.id);
+    dragRef.current = {
+      id: box.id,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: box.x,
+      startY: box.y,
+    };
+  }
+
+  async function copyCurrentPageBoxes() {
+    const json = JSON.stringify(currentPageBoxes, null, 2);
+    await navigator.clipboard.writeText(json);
+    setStatus(`Copied ${currentPageBoxes.length} boxes from page ${pageNumber}.`);
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const adminMode = params.get("admin") === "1";
+    setIsAdminMode(adminMode);
+    if (adminMode && !params.get("page")) {
+      setPageNumber(8);
+    }
+    if (params.get("page")) {
+      setPageNumber(Math.max(1, Number(params.get("page")) || DEFAULT_PAGE));
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,6 +205,40 @@ export default function Home() {
       cancelled = true;
     };
   }, [pageNumber]);
+
+  useEffect(() => {
+    function moveSelectedBox(event: globalThis.MouseEvent) {
+      const drag = dragRef.current;
+      if (!drag) return;
+
+      const nextX = drag.startX + (event.clientX - drag.startClientX) / renderSize.width;
+      const nextY = drag.startY + (event.clientY - drag.startClientY) / renderSize.height;
+
+      setTextBoxes((current) =>
+        current.map((box) => {
+          if (box.id !== drag.id) return box;
+
+          return {
+            ...box,
+            x: Math.min(Math.max(0, nextX), Math.max(0, 1 - box.w)),
+            y: Math.min(Math.max(0, nextY), Math.max(0, 1 - box.h)),
+          };
+        })
+      );
+    }
+
+    function stopDragging() {
+      dragRef.current = null;
+    }
+
+    window.addEventListener("mousemove", moveSelectedBox);
+    window.addEventListener("mouseup", stopDragging);
+
+    return () => {
+      window.removeEventListener("mousemove", moveSelectedBox);
+      window.removeEventListener("mouseup", stopDragging);
+    };
+  }, [renderSize.height, renderSize.width]);
 
   async function createFilledPdf() {
     try {
@@ -274,7 +367,10 @@ export default function Home() {
               </div>
             </div>
             <p style={styles.helper}>
-              {status || `${filledCount} fields filled. Fill the prepared areas on pages 8, 9, and 10.`}
+              {status ||
+                (isAdminMode
+                  ? `Admin editor: drag boxes to move, resize from the corner. ${currentPageBoxes.length} boxes on this page.`
+                  : `${filledCount} fields filled. Fill the prepared areas on pages 8, 9, and 10.`)}
             </p>
           </div>
           <div style={styles.pdfScroller}>
@@ -295,28 +391,59 @@ export default function Home() {
                 const height = box.h * renderSize.height;
 
                 return (
+                  <Fragment key={box.id}>
                   <textarea
-                    key={box.id}
                     ref={(element) => {
                       textBoxRefs.current[box.id] = element;
                     }}
                     value={box.text}
+                    onFocus={() => setSelectedTextBoxId(box.id)}
                     onBlur={() => syncTextBoxSize(box.id)}
                     onMouseUp={() => syncTextBoxSize(box.id)}
                     onChange={(event) => updateTextBox(box.id, event.target.value)}
                     placeholder=""
                     style={{
                       ...styles.overlayField,
+                      ...(isAdminMode ? styles.adminOverlayField : {}),
+                      ...(selectedTextBoxId === box.id && isAdminMode ? styles.selectedOverlayField : {}),
                       top,
                       left,
                       width,
                       height,
                     }}
                   />
+                  {isAdminMode && (
+                    <button
+                      aria-label="Move text box"
+                      onMouseDown={(event) => startDragging(event, box)}
+                      style={{
+                        ...styles.moveHandle,
+                        top: top - 9,
+                        left: left - 9,
+                      }}
+                    />
+                  )}
+                  </Fragment>
                 );
               })}
             </div>
           </div>
+          {isAdminMode && (
+            <section style={styles.adminPanel}>
+              <div style={styles.adminHeader}>
+                <div>
+                  <h3 style={styles.adminTitle}>Admin coordinates for page {pageNumber}</h3>
+                  <p style={styles.adminText}>
+                    Kéo/resize trên PDF, rồi copy JSON này gửi lại mình để chốt vị trí.
+                  </p>
+                </div>
+                <button onClick={copyCurrentPageBoxes} style={styles.smallButton}>
+                  Copy JSON
+                </button>
+              </div>
+              <pre style={styles.adminCode}>{JSON.stringify(currentPageBoxes, null, 2)}</pre>
+            </section>
+          )}
         </section>
       </section>
     </main>
@@ -504,5 +631,58 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "text",
     minWidth: 80,
     minHeight: 36,
+  },
+  adminOverlayField: {
+    border: "1px dashed rgba(79, 70, 229, 0.75)",
+    background: "rgba(255, 255, 255, 0.58)",
+  },
+  selectedOverlayField: {
+    border: "2px solid #4f46e5",
+    boxShadow: "0 0 0 3px rgba(79, 70, 229, 0.16)",
+  },
+  moveHandle: {
+    position: "absolute",
+    width: 18,
+    height: 18,
+    borderRadius: 999,
+    border: "2px solid white",
+    background: "#4f46e5",
+    boxShadow: "0 4px 10px rgba(15, 23, 42, 0.25)",
+    cursor: "move",
+    zIndex: 3,
+  },
+  adminPanel: {
+    marginTop: 18,
+    borderRadius: 10,
+    border: "1px solid #d1d5db",
+    background: "#f9fafb",
+    padding: 16,
+  },
+  adminHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "flex-start",
+    flexWrap: "wrap",
+  },
+  adminTitle: {
+    margin: 0,
+    fontSize: 16,
+  },
+  adminText: {
+    margin: "6px 0 0",
+    color: "#6b7280",
+    fontSize: 13,
+  },
+  adminCode: {
+    margin: "14px 0 0",
+    maxHeight: 280,
+    overflow: "auto",
+    borderRadius: 8,
+    background: "#111827",
+    color: "#f9fafb",
+    padding: 14,
+    fontSize: 12,
+    lineHeight: 1.5,
   },
 };
