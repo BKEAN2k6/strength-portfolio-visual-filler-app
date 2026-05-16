@@ -27,6 +27,23 @@ const PDF_PAGE_WIDTH = 612;
 const PDF_PAGE_HEIGHT = 792;
 const PDF_RENDER_SCALE = 1.35;
 const DEFAULT_PAGE = 1;
+const PRESET_TEXT_BOXES: TextBox[] = [
+  { id: "p8-q1", pageIndex: 7, x: 0.17, y: 0.28, w: 0.20, h: 0.12, text: "" },
+  { id: "p8-q2", pageIndex: 7, x: 0.18, y: 0.65, w: 0.21, h: 0.12, text: "" },
+  { id: "p8-q3", pageIndex: 7, x: 0.37, y: 0.65, w: 0.22, h: 0.12, text: "" },
+  { id: "p8-q4", pageIndex: 7, x: 0.38, y: 0.39, w: 0.22, h: 0.12, text: "" },
+  { id: "p8-q5", pageIndex: 7, x: 0.62, y: 0.08, w: 0.18, h: 0.12, text: "" },
+  { id: "p8-q6", pageIndex: 7, x: 0.56, y: 0.65, w: 0.20, h: 0.12, text: "" },
+  { id: "p8-q7", pageIndex: 7, x: 0.68, y: 0.39, w: 0.21, h: 0.12, text: "" },
+  { id: "p8-q8", pageIndex: 7, x: 0.78, y: 0.08, w: 0.18, h: 0.12, text: "" },
+  { id: "p8-q9", pageIndex: 7, x: 0.76, y: 0.65, w: 0.20, h: 0.12, text: "" },
+  { id: "p9-q1", pageIndex: 8, x: 0.14, y: 0.20, w: 0.30, h: 0.12, text: "" },
+  { id: "p9-q2", pageIndex: 8, x: 0.56, y: 0.20, w: 0.30, h: 0.12, text: "" },
+  { id: "p9-q3", pageIndex: 8, x: 0.14, y: 0.42, w: 0.30, h: 0.12, text: "" },
+  { id: "p9-q4", pageIndex: 8, x: 0.56, y: 0.42, w: 0.30, h: 0.12, text: "" },
+  { id: "p9-q5", pageIndex: 8, x: 0.14, y: 0.64, w: 0.30, h: 0.12, text: "" },
+  { id: "p9-q6", pageIndex: 8, x: 0.56, y: 0.64, w: 0.30, h: 0.12, text: "" },
+];
 
 function wrapText(text: string, maxChars: number) {
   const lines: string[] = [];
@@ -66,9 +83,10 @@ function withTimeout<T>(promise: Promise<T>, message: string) {
 }
 
 export default function Home() {
-  const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
+  const [textBoxes, setTextBoxes] = useState<TextBox[]>(PRESET_TEXT_BOXES);
   const [filledPdfUrl, setFilledPdfUrl] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  const [isAdminMode, setIsAdminMode] = useState(false);
   const [pageNumber, setPageNumber] = useState(DEFAULT_PAGE);
   const [pageCount, setPageCount] = useState(12);
   const [selectedTextBoxId, setSelectedTextBoxId] = useState<string | null>(null);
@@ -96,8 +114,8 @@ export default function Home() {
         pageIndex: pageNumber - 1,
         x,
         y,
-        w: 220,
-        h: 48,
+        w: 0.24,
+        h: 0.08,
         text: "",
       },
     ]);
@@ -110,6 +128,7 @@ export default function Home() {
   }
 
   function startDragging(event: MouseEvent<HTMLTextAreaElement>, box: TextBox) {
+    if (!isAdminMode) return;
     setSelectedTextBoxId(box.id);
     dragRef.current = {
       id: box.id,
@@ -124,12 +143,14 @@ export default function Home() {
     if (event.target !== event.currentTarget && event.target !== canvasRef.current) return;
 
     const rect = event.currentTarget.getBoundingClientRect();
-    const scaleX = pageSize.width / renderSize.width;
-    const scaleY = pageSize.height / renderSize.height;
-    const x = Math.max(0, (event.clientX - rect.left) * scaleX);
-    const y = Math.max(0, (event.clientY - rect.top) * scaleY);
+    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / renderSize.width));
+    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / renderSize.height));
     addTextBox(x, y);
   }
+
+  useEffect(() => {
+    setIsAdminMode(new URLSearchParams(window.location.search).get("admin") === "1");
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,10 +199,8 @@ export default function Home() {
       const drag = dragRef.current;
       if (!drag) return;
 
-      const scaleX = pageSize.width / renderSize.width;
-      const scaleY = pageSize.height / renderSize.height;
-      const nextX = drag.startX + (event.clientX - drag.startClientX) * scaleX;
-      const nextY = drag.startY + (event.clientY - drag.startClientY) * scaleY;
+      const nextX = drag.startX + (event.clientX - drag.startClientX) / renderSize.width;
+      const nextY = drag.startY + (event.clientY - drag.startClientY) / renderSize.height;
 
       setTextBoxes((current) =>
         current.map((box) => {
@@ -189,8 +208,8 @@ export default function Home() {
 
           return {
             ...box,
-            x: Math.min(Math.max(0, nextX), Math.max(0, pageSize.width - box.w)),
-            y: Math.min(Math.max(0, nextY), Math.max(0, pageSize.height - box.h)),
+            x: Math.min(Math.max(0, nextX), Math.max(0, 1 - box.w)),
+            y: Math.min(Math.max(0, nextY), Math.max(0, 1 - box.h)),
           };
         })
       );
@@ -241,18 +260,24 @@ export default function Home() {
         if (!value) continue;
 
         const page = pdfDoc.getPage(box.pageIndex);
-        const maxChars = Math.max(18, Math.floor(box.w / 6));
+        const pageWidth = page.getWidth();
+        const pageHeight = page.getHeight();
+        const boxX = box.x * pageWidth;
+        const boxY = box.y * pageHeight;
+        const boxWidth = box.w * pageWidth;
+        const boxHeight = box.h * pageHeight;
+        const maxChars = Math.max(18, Math.floor(boxWidth / 6));
         const lines = wrapText(value, maxChars);
-        const maxLines = Math.floor(box.h / lineHeight);
+        const maxLines = Math.floor(boxHeight / lineHeight);
 
         lines.slice(0, maxLines).forEach((line, index) => {
           page.drawText(line, {
-            x: box.x,
-            y: page.getHeight() - box.y - fontSize - index * lineHeight,
+            x: boxX,
+            y: pageHeight - boxY - fontSize - index * lineHeight,
             size: fontSize,
             font,
             color: rgb(0.1, 0.1, 0.1),
-            maxWidth: box.w,
+            maxWidth: boxWidth,
           });
         });
       }
@@ -291,20 +316,24 @@ export default function Home() {
           <a href={PDF_URL} target="_blank" rel="noreferrer" style={styles.secondaryButton}>
             Open original PDF
           </a>
-          <button onClick={() => addTextBox()} style={styles.secondaryButton}>
-            Tạo text box
-          </button>
-          <button
-            onClick={deleteSelectedTextBox}
-            disabled={!selectedTextBoxId}
-            style={{
-              ...styles.secondaryButton,
-              opacity: selectedTextBoxId ? 1 : 0.5,
-              cursor: selectedTextBoxId ? "pointer" : "not-allowed",
-            }}
-          >
-            Xoá text box
-          </button>
+          {isAdminMode && (
+            <>
+              <button onClick={() => addTextBox(0.1, 0.12)} style={styles.secondaryButton}>
+                Tạo text box
+              </button>
+              <button
+                onClick={deleteSelectedTextBox}
+                disabled={!selectedTextBoxId}
+                style={{
+                  ...styles.secondaryButton,
+                  opacity: selectedTextBoxId ? 1 : 0.5,
+                  cursor: selectedTextBoxId ? "pointer" : "not-allowed",
+                }}
+              >
+                Xoá text box
+              </button>
+            </>
+          )}
           <button onClick={createFilledPdf} style={styles.primaryButton}>
             Generate filled PDF
           </button>
@@ -344,12 +373,15 @@ export default function Home() {
               </div>
             </div>
             <p style={styles.helper}>
-              {status || `Double-click a blank area to add text. ${filledCount} text boxes filled.`}
+              {status ||
+                (isAdminMode
+                  ? `Admin mode: double-click to add boxes, select and drag to move. ${filledCount} boxes filled.`
+                  : `${filledCount} fields filled. Use page 8 and 9 for the prepared fill areas.`)}
             </p>
           </div>
           <div style={styles.pdfScroller}>
             <div
-              onDoubleClick={addTextBoxAtPoint}
+              onDoubleClick={isAdminMode ? addTextBoxAtPoint : undefined}
               style={{
                 ...styles.pdfPage,
                 width: renderSize.width,
@@ -360,12 +392,10 @@ export default function Home() {
               {textBoxes
                 .filter((box) => box.pageIndex === pageNumber - 1)
                 .map((box) => {
-                const scaleX = renderSize.width / pageSize.width;
-                const scaleY = renderSize.height / pageSize.height;
-                const top = box.y * scaleY;
-                const left = box.x * scaleX;
-                const width = box.w * scaleX;
-                const height = box.h * scaleY;
+                const top = box.y * renderSize.height;
+                const left = box.x * renderSize.width;
+                const width = box.w * renderSize.width;
+                const height = box.h * renderSize.height;
 
                 return (
                   <textarea
@@ -378,6 +408,7 @@ export default function Home() {
                     placeholder="Type here"
                     style={{
                       ...styles.overlayField,
+                      ...(isAdminMode ? styles.adminOverlayField : {}),
                       ...(selectedTextBoxId === box.id ? styles.selectedOverlayField : {}),
                       top,
                       left,
@@ -571,6 +602,9 @@ const styles: Record<string, React.CSSProperties> = {
     resize: "none",
     boxSizing: "border-box",
     outline: "none",
+    cursor: "text",
+  },
+  adminOverlayField: {
     cursor: "move",
   },
   selectedOverlayField: {

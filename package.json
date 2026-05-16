@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start"
   },
@@ -13,6 +13,4 @@
     "pdfjs-dist": "^5.7.284",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "typescript": "latest"
-  }
-}
+    
